@@ -124,7 +124,7 @@ function Index() {
         {tab === "today" && (
           <>
             {state.pending ? (
-              <TimeToPlant state={state} onPlace={(i) => { setState(placePending(state, i)); setToast("🏡 Planted forever in your garden! Pick a new seed to keep growing."); }} onCatalog={() => setTab("seeds")} />
+              <TimeToPlant state={state} onPlace={(i) => { setState((s) => (s ? placePending(s, i) : s)); setToast("🏡 Planted forever in your garden! Pick a new seed to keep growing."); }} onCatalog={() => setTab("seeds")} />
             ) : plant && state.plant ? (
               <>
                 <section className="rounded-3xl bg-card p-6 text-center shadow-soft">
@@ -247,51 +247,127 @@ function Index() {
   );
 }
 
+// How long the planting jiggle + petal burst plays before the plant is committed to the garden.
+const LANDING_MS = 1300;
+
 function TimeToPlant({ state, onPlace, onCatalog }: { state: BloomState; onPlace: (i: number) => void; onCatalog: () => void }) {
   const [picked, setPicked] = useState(false);
+  const [landing, setLanding] = useState<{ index: number; type: PlantType; days: number } | null>(null);
   const p = state.pending!;
   const full = state.garden.every(Boolean);
+
+  // Let the plant visibly settle into its tile before the planting screen gives way to the next step.
+  const place = (i: number) => {
+    if (landing) return;
+    setLanding({ index: i, type: p.type, days: p.days });
+    setPicked(false);
+    setTimeout(() => onPlace(i), LANDING_MS);
+  };
+
   return (
     <section className="banner-in space-y-4 rounded-3xl bg-card p-6 text-center shadow-soft">
       <h2 className="text-3xl font-bold">🎉 Time to Plant!</h2>
-      <p className="text-xl text-muted-foreground">{picked ? "Now tap an empty grass tile below." : `Tap your ${PLANTS[p.type].name}, then tap an empty spot in your garden.`}</p>
-      <button onClick={() => setPicked(!picked)} aria-pressed={picked}
-        className={`mx-auto flex flex-col items-center rounded-3xl border-4 p-3 ${picked ? "glow border-plant-sunflower" : "border-primary"}`}>
+      <p className="text-xl text-muted-foreground" role="status" aria-live="polite">
+        {landing ? `Planting your ${PLANTS[p.type].name}…` : picked ? "Now tap an empty grass tile below." : `Tap your ${PLANTS[p.type].name}, then tap an empty spot in your garden.`}
+      </p>
+      <button onClick={() => setPicked(!picked)} aria-pressed={picked} disabled={!!landing}
+        className={`mx-auto flex flex-col items-center rounded-3xl border-4 p-3 transition-opacity ${landing ? "border-border opacity-50" : picked ? "glow border-plant-sunflower" : "border-primary"}`}>
         <Plant type={p.type} progress={p.days} wilting={false} size={160} />
-        <span className="text-xl font-bold">{picked ? "✋ Selected" : "👆 Tap to pick up"}</span>
+        <span className="text-xl font-bold">{landing ? "🌱 Planting…" : picked ? "✋ Selected" : "👆 Tap to pick up"}</span>
       </button>
       {full && <p className="text-lg font-bold text-destructive">Your garden is full! Ask a helper to make room.</p>}
-      <GardenGrid garden={state.garden} placing={picked} onPlace={(i) => { onPlace(i); setPicked(false); }} />
+      <GardenGrid garden={state.garden} placing={picked && !landing} onPlace={place} landing={landing} />
       <button onClick={onCatalog} className={btnOutline}>🎒 View Seed Catalog</button>
     </section>
   );
 }
 
-function GardenGrid({ garden, placing = false, onPlace }: { garden: BloomState["garden"]; placing?: boolean; onPlace?: (i: number) => void }) {
+const PETAL_COLORS = ["var(--plant-blossom-mid)", "var(--plant-blossom)", "var(--plant-sunflower)", "var(--leaf)", "var(--plant-lavender)", "var(--leaf-dark)"];
+
+/** A burst of petals and leaves that flies out from the tile a plant just landed in. */
+function PetalBurst() {
+  const [bits] = useState(() => Array.from({ length: 18 }, (_, i) => {
+    const angle = (Math.PI * 2 * i) / 18 + (Math.random() - 0.5) * 0.5;
+    const dist = 55 + Math.random() * 55;
+    return {
+      dx: Math.cos(angle) * dist,
+      dy: Math.sin(angle) * dist - 30,
+      rot: Math.round((Math.random() - 0.5) * 720),
+      delay: 0.25 + Math.random() * 0.15,
+      color: PETAL_COLORS[i % PETAL_COLORS.length],
+      leafy: i % 3 === 0,
+    };
+  }));
+  return (
+    <span aria-hidden="true">
+      {bits.map((b, i) => (
+        <span key={i} className={`petal ${b.leafy ? "leafy" : ""}`}
+          style={{ ["--dx" as string]: `${b.dx}px`, ["--dy" as string]: `${b.dy}px`, ["--rot" as string]: `${b.rot}deg`, ["--c" as string]: b.leafy ? "var(--leaf)" : b.color, ["--d" as string]: `${b.delay}s` }} />
+      ))}
+    </span>
+  );
+}
+
+function GardenGrid({ garden, placing = false, onPlace, landing = null }: { garden: BloomState["garden"]; placing?: boolean; onPlace?: (i: number) => void; landing?: { index: number; type: PlantType; days: number } | null }) {
   const [info, setInfo] = useState<number | null>(null);
   return (
-    <ul className="grid grid-cols-4 gap-2 sm:gap-3" aria-label="Forever Garden, 4 by 4 plot">
-      {garden.map((g, i) => (
-        <li key={g?.id ?? `empty-${i}`} className="group relative">
-          {g ? (
-            <button onClick={() => setInfo(info === i ? null : i)} aria-label={`${PLANTS[g.type].name}. Grown over ${g.days} days, finished on ${fmt(g.bloomedOn)}`}
-              className="tile-grass plant-in flex aspect-square min-h-[64px] w-full items-end justify-center overflow-hidden rounded-2xl border-2 border-primary focus-visible:outline-4 focus-visible:outline-ring">
-              <Plant type={g.type} progress={g.days} wilting={false} size={70} />
-            </button>
-          ) : (
-            <button disabled={!placing} onClick={() => onPlace?.(i)} aria-label={placing ? `Plant here, spot ${i + 1}` : `Empty spot ${i + 1}`}
-              className={`tile-grass flex aspect-square min-h-[64px] w-full items-center justify-center rounded-2xl border-2 text-base font-bold text-foreground ${placing ? "border-dashed border-primary hover:brightness-110" : "border-border opacity-70"}`}>
-              {placing ? "🌱 Plant here" : ""}
-            </button>
-          )}
-          {g && (
-            <span role="tooltip" className={`absolute left-1/2 top-full z-20 mt-1 w-48 -translate-x-1/2 rounded-xl border-2 border-primary bg-card p-2 text-center text-base font-bold text-foreground shadow-soft ${info === i ? "block" : "hidden group-hover:block"}`}>
-              {PLANTS[g.type].emoji} Grown over {g.days} days, finished on {fmt(g.bloomedOn)}
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
+    <div className="garden-scene">
+      <div className="garden-sky" aria-hidden="true">
+        <span className="garden-tree" style={{ left: "-3%", width: 92, height: 92 }} />
+        <span className="garden-tree blossom" style={{ left: "18%", width: 70, height: 70, bottom: 30 }} />
+        <span className="garden-tree" style={{ left: "40%", width: 100, height: 100, bottom: 20 }} />
+        <span className="garden-tree" style={{ left: "66%", width: 78, height: 78, bottom: 28 }} />
+        <span className="garden-tree blossom" style={{ left: "86%", width: 84, height: 84 }} />
+        <span className="garden-hedge" />
+      </div>
+      <div className="garden-fence" aria-hidden="true">
+        {Array.from({ length: 14 }).map((_, i) => <span key={i} className="garden-picket" />)}
+      </div>
+      <div className="garden-patio">
+        <span className="garden-critter garden-butterfly" style={{ right: 10, top: 6 }} aria-hidden="true">🦋</span>
+        <ul className="garden-bed grid grid-cols-4 gap-2 sm:gap-3" aria-label="Forever Garden, 4 by 4 plot">
+          {garden.map((g, i) => {
+            const isLanding = landing?.index === i;
+            const entry = g ?? (isLanding && landing ? { type: landing.type, days: landing.days } : null);
+            const sway = { ["--breeze-delay" as string]: `${(i * 1.7) % 6}s`, ["--breeze-dur" as string]: `${6 + (i % 4)}s` };
+            return (
+              <li key={g?.id ?? `empty-${i}`} className="group relative">
+                {g ? (
+                  <button onClick={() => setInfo(info === i ? null : i)} aria-label={`${PLANTS[g.type].name}. Grown over ${g.days} days, finished on ${fmt(g.bloomedOn)}`}
+                    style={sway} className="garden-tile is-planted flex aspect-square min-h-[64px] w-full items-end justify-center">
+                    <span className="pot-shadow" aria-hidden="true" />
+                    <span className="plant-wrap"><Plant type={g.type} progress={g.days} wilting={false} size={70} /></span>
+                  </button>
+                ) : entry ? (
+                  <>
+                    <button disabled aria-label={`Planting your ${PLANTS[entry.type].name} in spot ${i + 1}`}
+                      style={sway} className="garden-tile is-planted flex aspect-square min-h-[64px] w-full items-end justify-center">
+                      <span className="pot-shadow" aria-hidden="true" />
+                      <span className="plant-wrap plant-jiggle"><Plant type={entry.type} progress={entry.days} wilting={false} size={70} /></span>
+                    </button>
+                    <PetalBurst />
+                  </>
+                ) : (
+                  <button disabled={!placing} onClick={() => onPlace?.(i)} aria-label={placing ? `Plant here, spot ${i + 1}` : `Empty spot ${i + 1}`}
+                    className={`garden-tile is-empty flex aspect-square min-h-[64px] w-full items-center justify-center ${placing ? "is-placing" : ""}`}>
+                    {placing && <span className="garden-tile-label">🌱 Plant here</span>}
+                  </button>
+                )}
+                {g && (
+                  <span role="tooltip" className={`absolute left-1/2 top-full z-20 mt-1 w-48 -translate-x-1/2 rounded-xl border-2 border-primary bg-card p-2 text-center text-base font-bold text-foreground shadow-soft ${info === i ? "block" : "hidden group-hover:block"}`}>
+                    {PLANTS[g.type].emoji} Grown over {g.days} days, finished on {fmt(g.bloomedOn)}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+      <div className="garden-wall" aria-hidden="true">
+        <span className="garden-wall-row" />
+        <span className="garden-wall-row offset" />
+      </div>
+    </div>
   );
 }
 
