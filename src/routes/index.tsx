@@ -2,8 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { Plant } from "@/components/Plant";
 import {
-  PLANTS, DAYS_TO_BLOOM, initialState, toggleMed, endDay, archive, chooseSeed, stageOf, todayKey,
-  type BloomState, type PlantType,
+  PLANTS, GARDEN_SIZE, TIMES, MED_ICONS, initialState, toggleMed, endDay, bloom, chooseSeed, stageOf, todayKey,
+  placePending, upsertMed, deleteMed, sortMeds, currentSlot, shareMessage, weeklyPerfect,
+  type BloomState, type PlantType, type Med, type MedIconType, type TimeOfDay,
 } from "@/lib/bloom";
 
 export const Route = createFileRoute("/")({
@@ -20,9 +21,20 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const KEY = "bloomroutine-v1";
+const KEY = "bloomroutine-v2";
 type Tab = "today" | "seeds" | "garden";
 const fmt = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+const btn = "min-h-[64px] rounded-2xl px-5 text-xl font-bold focus-visible:outline-4 focus-visible:outline-ring";
+const btnPrimary = `${btn} bg-primary text-primary-foreground shadow-soft disabled:bg-muted disabled:text-muted-foreground`;
+const btnOutline = `${btn} border-2 border-border bg-card text-foreground hover:bg-muted`;
+
+function load(): BloomState {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY) || "") as BloomState;
+    if (!Array.isArray(s.garden) || s.garden.length !== GARDEN_SIZE || !Array.isArray(s.history)) throw new Error();
+    return s;
+  } catch { return initialState(); }
+}
 
 function Index() {
   const [state, setState] = useState<BloomState | null>(null);
@@ -30,23 +42,28 @@ function Index() {
   const [toast, setToast] = useState<string | null>(null);
   const [confetti, setConfetti] = useState(0);
   const [drops, setDrops] = useState<{ id: number; x: number; y: number; dx: number; dy: number }[]>([]);
+  const [manage, setManage] = useState(false);
+  const [hour, setHour] = useState(12);
   const plantRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let s: BloomState;
-    try { s = JSON.parse(localStorage.getItem(KEY) || "") as BloomState; } catch { s = initialState(); }
+    let s = load();
     const today = todayKey();
     if (s.date !== today) s = endDay(s, today);
     setState(s);
+    const tick = () => setHour(new Date().getHours());
+    tick();
+    const t = setInterval(tick, 60000);
+    return () => clearInterval(t);
   }, []);
   useEffect(() => { if (state) localStorage.setItem(KEY, JSON.stringify(state)); }, [state]);
-  useEffect(() => { if (!toast) return undefined; const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); }, [toast]);
+  useEffect(() => { if (!toast) return undefined; const t = setTimeout(() => setToast(null), 4500); return () => clearTimeout(t); }, [toast]);
 
   if (!state) return <div className="min-h-dvh bg-background" />;
 
   const celebrate = (name: string) => {
     setConfetti(Date.now());
-    setToast(`🎉 Your ${name} is in full bloom! It's now in your Garden.`);
+    setToast(`🎉 Your ${name} is in full bloom! Time to plant it in your Forever Garden.`);
     setTimeout(() => setConfetti(0), 4000);
   };
 
@@ -65,8 +82,16 @@ function Index() {
     else if (!med.taken) setToast(next.todayCounted && !state.todayCounted ? "🌟 Perfect Day! Your plant grew." : "💧 Well done! Your plant has been watered.");
   };
 
+  const share = async () => {
+    const msg = shareMessage(state);
+    try { await navigator.clipboard.writeText(msg); setToast("💞 Copied! Paste it into a text or email to share."); }
+    catch { window.prompt("Copy this message:", msg); }
+  };
+
   const plant = state.plant ? PLANTS[state.plant] : null;
-  const allTaken = state.meds.every((m) => m.taken);
+  const allTaken = state.meds.length > 0 && state.meds.every((m) => m.taken);
+  const slot = currentSlot(hour);
+  const meds = sortMeds(state.meds, hour);
 
   return (
     <div className="min-h-dvh bg-background pb-40">
@@ -81,7 +106,7 @@ function Index() {
       </header>
 
       <nav aria-label="Main" className="mx-auto grid max-w-3xl grid-cols-3 gap-3 px-5">
-        {([["today", "☀️", "Today"], ["seeds", "🌰", "Choose a Seed"], ["garden", "🏡", "My Garden"]] as const).map(([k, i, l]) => (
+        {([["today", "☀️", "Today"], ["seeds", "🎒", "Seed Catalog"], ["garden", "🏡", "My Garden"]] as const).map(([k, i, l]) => (
           <button key={k} onClick={() => setTab(k)} aria-current={tab === k ? "page" : undefined}
             className={`min-h-[72px] rounded-2xl border-2 px-2 text-lg font-bold transition-colors focus-visible:outline-4 focus-visible:outline-ring ${tab === k ? "border-primary bg-primary text-primary-foreground shadow-soft" : "border-border bg-card text-foreground hover:bg-muted"}`}>
             <span aria-hidden="true">{i}</span> {l}
@@ -95,74 +120,91 @@ function Index() {
         </div>
       )}
 
-      <main className="mx-auto mt-6 max-w-3xl px-5">
+      <main className="mx-auto mt-6 max-w-3xl space-y-6 px-5">
         {tab === "today" && (
-          plant && state.plant ? (
-            <div className="space-y-6">
-              <section className="rounded-3xl bg-card p-6 text-center shadow-soft">
-                <div ref={plantRef} className="flex justify-center">
-                  <Plant type={state.plant} progress={state.progress} wilting={state.wilting} />
-                </div>
-                <h2 className="mt-2 text-2xl font-bold">{plant.name} · {stageOf(state.progress)}</h2>
-                <div className="mx-auto mt-3 max-w-md">
-                  <div className="h-5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={DAYS_TO_BLOOM} aria-valuenow={state.progress} aria-label="Days of care">
-                    <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${(state.progress / DAYS_TO_BLOOM) * 100}%` }} />
+          <>
+            {state.pending ? (
+              <TimeToPlant state={state} onPlace={(i) => { setState(placePending(state, i)); setToast("🏡 Planted forever in your garden! Pick a new seed to keep growing."); }} onCatalog={() => setTab("seeds")} />
+            ) : plant && state.plant ? (
+              <>
+                <section className="rounded-3xl bg-card p-6 text-center shadow-soft">
+                  <div ref={plantRef} className="flex justify-center">
+                    <Plant type={state.plant} progress={state.progress} wilting={state.wilting} />
                   </div>
-                  <p className="mt-2 text-lg text-muted-foreground">{state.progress} of {DAYS_TO_BLOOM} perfect days</p>
+                  <h2 className="mt-2 text-2xl font-bold">{plant.name} · {stageOf(state.progress, plant.days)}</h2>
+                  <div className="mx-auto mt-3 max-w-md">
+                    <div className="h-5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={plant.days} aria-valuenow={state.progress} aria-label="Days of care">
+                      <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${(state.progress / plant.days) * 100}%` }} />
+                    </div>
+                    <p className="mt-2 text-lg text-muted-foreground">{state.progress} of {plant.days} perfect days</p>
+                  </div>
+                </section>
+                <div className={`rounded-2xl border-2 px-5 py-4 text-xl font-bold transition-colors ${state.wilting ? "border-water-strong bg-water text-secondary-foreground" : "border-primary bg-success text-foreground"}`}>
+                  {state.wilting
+                    ? "💧 Your plant is thirsty! Take your medicine to water it back to health."
+                    : allTaken ? `🌟 All done for today! Your ${plant.short} is thriving.`
+                    : `${plant.emoji} Your ${plant.short} is thriving! Keep it up.`}
                 </div>
+              </>
+            ) : (
+              <section className="rounded-3xl bg-card p-8 text-center shadow-soft">
+                <p className="text-5xl" aria-hidden="true">🌰</p>
+                <h2 className="mt-3 text-3xl font-bold">Time to plant a seed!</h2>
+                <p className="mt-2 text-xl text-muted-foreground">Pick a plant from the Seed Catalog to start growing.</p>
+                <button onClick={() => setTab("seeds")} className={`mt-6 ${btnPrimary}`}>🎒 Open Seed Catalog</button>
               </section>
+            )}
 
-              <div className={`rounded-2xl border-2 px-5 py-4 text-xl font-bold transition-colors ${state.wilting ? "border-water-strong bg-water text-secondary-foreground" : "border-primary bg-success text-foreground"}`}>
-                {state.wilting
-                  ? `💧 Your ${plant.name.split(" ").pop()} is thirsty! Log your medicine to water it.`
-                  : allTaken ? `🌟 All done for today! Your ${plant.name.split(" ").pop()} is thriving.`
-                  : `🌻 Your ${plant.name.split(" ").pop()} is thriving! Keep it up.`}
+            <section>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-2xl font-bold">Today's medicine</h2>
+                <button onClick={() => setManage(true)} className={btnOutline}>⚙️ Manage Medications</button>
               </div>
-
-              <section>
-                <h2 className="mb-3 text-2xl font-bold">Today's medicine</h2>
+              {meds.length === 0 ? (
+                <p className="rounded-2xl bg-card p-6 text-xl text-muted-foreground shadow-soft">No medications yet. Tap "⚙️ Manage Medications" to add one.</p>
+              ) : (
                 <ul className="space-y-4">
-                  {state.meds.map((m) => (
-                    <li key={m.id}>
-                      <button onClick={(e) => onToggle(m.id, e)} aria-pressed={m.taken}
-                        className={`flex min-h-[88px] w-full items-center gap-5 rounded-2xl border-2 p-4 text-left transition-colors focus-visible:outline-4 focus-visible:outline-ring ${m.taken ? "pop border-primary bg-success" : "border-border bg-card hover:bg-muted"}`}>
-                        <span className={`flex h-[60px] w-[60px] shrink-0 items-center justify-center rounded-xl border-4 text-3xl font-bold ${m.taken ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground bg-background"}`} aria-hidden="true">{m.taken ? "✓" : ""}</span>
-                        <span className="flex-1">
-                          <span className="block text-lg text-muted-foreground">{m.time}</span>
-                          <span className="block text-2xl font-bold">{m.label}</span>
-                        </span>
-                        <span className="text-lg font-bold text-primary">{m.taken ? "Taken" : "Tap when taken"}</span>
-                      </button>
-                    </li>
-                  ))}
+                  {meds.map((m) => {
+                    const now = m.time === slot;
+                    return (
+                      <li key={m.id}>
+                        {now && !m.taken && <p className="mb-1 text-lg font-bold text-primary">⏰ Take now · {m.time}</p>}
+                        <button onClick={(e) => onToggle(m.id, e)} aria-pressed={m.taken}
+                          className={`flex min-h-[88px] w-full items-center gap-4 rounded-2xl p-4 text-left transition-colors focus-visible:outline-4 focus-visible:outline-ring ${m.taken ? "pop border-2 border-primary bg-success" : now ? "border-4 border-plant-sunflower bg-card shadow-soft" : "border-2 border-border bg-card opacity-90 hover:bg-muted"}`}>
+                          <span className={`flex h-[60px] w-[60px] shrink-0 items-center justify-center rounded-xl border-4 text-3xl font-bold ${m.taken ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground bg-background"}`} aria-hidden="true">{m.taken ? "✓" : ""}</span>
+                          <MedIcon icon={m.icon} />
+                          <span className="flex-1">
+                            <span className="block text-lg text-muted-foreground">{m.time}</span>
+                            <span className="block text-2xl font-bold">{m.name}</span>
+                          </span>
+                          <span className="text-lg font-bold text-primary">{m.taken ? "Taken" : "Tap when taken"}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
-              </section>
-            </div>
-          ) : (
-            <section className="rounded-3xl bg-card p-8 text-center shadow-soft">
-              <p className="text-5xl" aria-hidden="true">🌰</p>
-              <h2 className="mt-3 text-3xl font-bold">Time to plant a new seed!</h2>
-              <p className="mt-2 text-xl text-muted-foreground">Your last plant is safe in your Garden.</p>
-              <button onClick={() => setTab("seeds")} className="mt-6 min-h-[72px] rounded-2xl bg-primary px-8 text-xl font-bold text-primary-foreground shadow-soft">Choose a Seed</button>
+              )}
             </section>
-          )
+          </>
         )}
 
         {tab === "seeds" && (
           <section>
-            <h2 className="mb-4 text-3xl font-bold">Choose a Seed</h2>
+            <h2 className="mb-2 text-3xl font-bold">🎒 Seed Catalog</h2>
             {state.plant && <p className="mb-4 text-lg text-muted-foreground">Choosing a new seed will replace your current plant and restart its growth.</p>}
-            <ul className="grid gap-5 sm:grid-cols-2">
+            {state.pending && <p className="mb-4 text-lg font-bold text-primary">Plant your bloomed {PLANTS[state.pending.type].short} in your garden first (on the Today screen).</p>}
+            <ul className="grid gap-5 sm:grid-cols-3">
               {(Object.keys(PLANTS) as PlantType[]).map((t) => (
                 <li key={t} className="flex flex-col items-center rounded-3xl bg-card p-5 text-center shadow-soft">
-                  <Plant type={t} progress={DAYS_TO_BLOOM} wilting={false} size={150} />
-                  <h3 className="text-2xl font-bold">{PLANTS[t].name}</h3>
+                  <Plant type={t} progress={PLANTS[t].days} wilting={false} size={140} />
+                  <h3 className="text-2xl font-bold">{PLANTS[t].emoji} {PLANTS[t].name}</h3>
+                  <p className="text-lg text-muted-foreground">Type: {PLANTS[t].kind}</p>
                   <p className="text-lg text-muted-foreground">{PLANTS[t].blurb}</p>
-                  <p className="mt-1 text-lg font-bold">🗓️ {PLANTS[t].days} Days of Care to Bloom</p>
-                  <button disabled={state.plant === t}
+                  <p className="mt-1 text-lg font-bold">🗓️ Takes {PLANTS[t].days} perfect days to reach maturity</p>
+                  <button disabled={state.plant === t || !!state.pending}
                     onClick={() => { setState(chooseSeed(state, t)); setTab("today"); setToast(`🌱 You planted a ${PLANTS[t].name}!`); }}
-                    className="mt-4 min-h-[64px] w-full rounded-2xl bg-primary text-xl font-bold text-primary-foreground disabled:bg-muted disabled:text-muted-foreground">
-                    {state.plant === t ? "Currently growing" : "Plant this seed"}
+                    className={`mt-auto w-full ${btnPrimary} mt-4`}>
+                    {state.plant === t ? "Currently growing" : "🌱 Plant this seed"}
                   </button>
                 </li>
               ))}
@@ -172,43 +214,188 @@ function Index() {
 
         {tab === "garden" && (
           <section>
-            <h2 className="mb-4 text-3xl font-bold">My Garden</h2>
-            {state.garden.length === 0 ? (
-              <p className="rounded-3xl bg-card p-8 text-center text-xl text-muted-foreground shadow-soft">Your garden is waiting. Complete 7 perfect days to see your first bloom here.</p>
-            ) : (
-              <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3">
-                {state.garden.map((g) => (
-                  <li key={g.id} className="flex flex-col items-center rounded-3xl bg-card p-4 text-center shadow-soft">
-                    <Plant type={g.type} progress={DAYS_TO_BLOOM} wilting={false} size={120} />
-                    <h3 className="text-xl font-bold">{PLANTS[g.type].name}</h3>
-                    <p className="text-lg text-muted-foreground">Bloomed on {fmt(g.bloomedOn)}</p>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <h2 className="mb-2 text-3xl font-bold">🏡 My Forever Garden</h2>
+            <p className="mb-4 text-lg text-muted-foreground">Tap a plant to see its story.</p>
+            <GardenGrid garden={state.garden} />
           </section>
         )}
+
+        <section className="rounded-3xl border-2 border-border bg-card p-5 shadow-soft">
+          <h2 className="text-2xl font-bold">💞 Share My Progress</h2>
+          <p className="mt-1 text-lg text-muted-foreground">{weeklyPerfect(state)} of the last 7 days complete. Send a friendly update to family or your doctor.</p>
+          <button onClick={share} className={`mt-3 w-full ${btnPrimary}`}>💞 Copy My Progress Message</button>
+        </section>
       </main>
+
+      {manage && <ManageMeds meds={state.meds} onClose={() => setManage(false)}
+        onSave={(m) => setState(upsertMed(state, m))} onDelete={(id) => setState(deleteMed(state, id))} />}
 
       <details className="mx-auto mt-16 max-w-3xl px-5 text-muted-foreground">
         <summary className="cursor-pointer text-base">Developer controls</summary>
         <div className="mt-3 flex flex-wrap gap-3">
           <button className="min-h-[60px] rounded-xl border-2 border-border bg-card px-4 text-base font-bold text-foreground"
-            onClick={() => setState(endDay({ ...state, meds: state.meds.map((m) => ({ ...m, taken: false })) }, todayKey()))}>Missed Day (Wilt)</button>
+            onClick={() => setState(endDay({ ...state, meds: state.meds.map((m) => ({ ...m, taken: false })) }, todayKey()))}>💧 Missed Day (Wilt)</button>
           <button className="min-h-[60px] rounded-xl border-2 border-border bg-card px-4 text-base font-bold text-foreground" disabled={!state.plant}
-            onClick={() => { const n = state.plant ? PLANTS[state.plant].name : ""; setState(archive({ ...state, progress: DAYS_TO_BLOOM })); celebrate(n); }}>Fast-Forward 7 Days (Bloom)</button>
+            onClick={() => { const n = state.plant ? PLANTS[state.plant].name : ""; setState(bloom(state)); setTab("today"); celebrate(n); }}>⏩ Fast-Forward (Bloom)</button>
           <button className="min-h-[60px] rounded-xl border-2 border-border bg-card px-4 text-base font-bold text-foreground"
-            onClick={() => setState(endDay(state, todayKey()))}>Next Day</button>
+            onClick={() => setState(endDay(state, todayKey()))}>📅 Next Day</button>
           <button className="min-h-[60px] rounded-xl border-2 border-destructive bg-card px-4 text-base font-bold text-destructive"
-            onClick={() => setState(initialState())}>Reset All</button>
+            onClick={() => setState(initialState())}>🔄 Reset All</button>
         </div>
       </details>
     </div>
   );
 }
 
+function TimeToPlant({ state, onPlace, onCatalog }: { state: BloomState; onPlace: (i: number) => void; onCatalog: () => void }) {
+  const [picked, setPicked] = useState(false);
+  const p = state.pending!;
+  const full = state.garden.every(Boolean);
+  return (
+    <section className="banner-in space-y-4 rounded-3xl bg-card p-6 text-center shadow-soft">
+      <h2 className="text-3xl font-bold">🎉 Time to Plant!</h2>
+      <p className="text-xl text-muted-foreground">{picked ? "Now tap an empty grass tile below." : `Tap your ${PLANTS[p.type].name}, then tap an empty spot in your garden.`}</p>
+      <button onClick={() => setPicked(!picked)} aria-pressed={picked}
+        className={`mx-auto flex flex-col items-center rounded-3xl border-4 p-3 ${picked ? "glow border-plant-sunflower" : "border-primary"}`}>
+        <Plant type={p.type} progress={p.days} wilting={false} size={160} />
+        <span className="text-xl font-bold">{picked ? "✋ Selected" : "👆 Tap to pick up"}</span>
+      </button>
+      {full && <p className="text-lg font-bold text-destructive">Your garden is full! Ask a helper to make room.</p>}
+      <GardenGrid garden={state.garden} placing={picked} onPlace={(i) => { onPlace(i); setPicked(false); }} />
+      <button onClick={onCatalog} className={btnOutline}>🎒 View Seed Catalog</button>
+    </section>
+  );
+}
+
+function GardenGrid({ garden, placing = false, onPlace }: { garden: BloomState["garden"]; placing?: boolean; onPlace?: (i: number) => void }) {
+  const [info, setInfo] = useState<number | null>(null);
+  return (
+    <ul className="grid grid-cols-4 gap-2 sm:gap-3" aria-label="Forever Garden, 4 by 4 plot">
+      {garden.map((g, i) => (
+        <li key={g?.id ?? `empty-${i}`} className="group relative">
+          {g ? (
+            <button onClick={() => setInfo(info === i ? null : i)} aria-label={`${PLANTS[g.type].name}. Grown over ${g.days} days, finished on ${fmt(g.bloomedOn)}`}
+              className="tile-grass plant-in flex aspect-square min-h-[64px] w-full items-end justify-center overflow-hidden rounded-2xl border-2 border-primary focus-visible:outline-4 focus-visible:outline-ring">
+              <Plant type={g.type} progress={g.days} wilting={false} size={70} />
+            </button>
+          ) : (
+            <button disabled={!placing} onClick={() => onPlace?.(i)} aria-label={placing ? `Plant here, spot ${i + 1}` : `Empty spot ${i + 1}`}
+              className={`tile-grass flex aspect-square min-h-[64px] w-full items-center justify-center rounded-2xl border-2 text-base font-bold text-foreground ${placing ? "border-dashed border-primary hover:brightness-110" : "border-border opacity-70"}`}>
+              {placing ? "🌱 Plant here" : ""}
+            </button>
+          )}
+          {g && (
+            <span role="tooltip" className={`absolute left-1/2 top-full z-20 mt-1 w-48 -translate-x-1/2 rounded-xl border-2 border-primary bg-card p-2 text-center text-base font-bold text-foreground shadow-soft ${info === i ? "block" : "hidden group-hover:block"}`}>
+              {PLANTS[g.type].emoji} Grown over {g.days} days, finished on {fmt(g.bloomedOn)}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MedIcon({ icon, size = 44 }: { icon: MedIconType; size?: number }) {
+  return (
+    <svg viewBox="0 0 40 40" width={size} height={size} aria-hidden="true" className="shrink-0">
+      {icon === "round" && <><circle cx="20" cy="20" r="14" fill="var(--card)" stroke="var(--foreground)" strokeWidth="3" /><line x1="10" y1="20" x2="30" y2="20" stroke="var(--foreground)" strokeWidth="2" /></>}
+      {icon === "oval" && <ellipse cx="20" cy="20" rx="16" ry="10" fill="var(--plant-sunflower)" stroke="var(--foreground)" strokeWidth="3" />}
+      {icon === "capsule" && <g transform="rotate(-35 20 20)"><path d="M20 12 h-6 a8 8 0 0 0 0 16 h6 Z" fill="var(--plant-rose)" stroke="var(--foreground)" strokeWidth="3" /><path d="M20 12 h6 a8 8 0 0 1 0 16 h-6 Z" fill="var(--card)" stroke="var(--foreground)" strokeWidth="3" /></g>}
+      {icon === "liquid" && <path d="M20 5 C12 17 9 22 9 26 a11 11 0 0 0 22 0 c0 -4 -3 -9 -11 -21Z" fill="var(--water-strong)" stroke="var(--foreground)" strokeWidth="3" />}
+    </svg>
+  );
+}
+
+function ManageMeds({ meds, onClose, onSave, onDelete }: { meds: Med[]; onClose: () => void; onSave: (m: { id?: string; name: string; time: TimeOfDay; icon: MedIconType }) => void; onDelete: (id: string) => void }) {
+  const [editing, setEditing] = useState<{ id?: string; name: string; time: TimeOfDay; icon: MedIconType } | null>(null);
+  const [error, setError] = useState("");
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  useEffect(() => { const k = (e: KeyboardEvent) => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+
+  const save = () => {
+    if (!editing) return;
+    const name = editing.name.trim();
+    if (!name) return setError("Please type a medication name.");
+    if (name.length > 60) return setError("Please keep the name under 60 letters.");
+    onSave({ ...editing, name }); setEditing(null); setError("");
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-foreground/50 p-3 sm:items-center" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby="mm-title" onClick={(e) => e.stopPropagation()}
+        className="banner-in max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-card p-6 shadow-soft">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 id="mm-title" className="text-3xl font-bold">⚙️ Manage Medications</h2>
+          <button onClick={onClose} className={btnOutline}>✖️ Close</button>
+        </div>
+
+        {editing ? (
+          <div className="space-y-5">
+            <label className="block">
+              <span className="text-xl font-bold">Medication name</span>
+              <input autoFocus value={editing.name} maxLength={60} onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                placeholder="e.g. Blood Pressure" className="mt-2 min-h-[64px] w-full rounded-2xl border-2 border-input bg-background px-4 text-xl" />
+            </label>
+            <fieldset>
+              <legend className="text-xl font-bold">Time of day</legend>
+              <div className="mt-2 grid grid-cols-3 gap-3">
+                {TIMES.map((t) => (
+                  <button key={t} onClick={() => setEditing({ ...editing, time: t })} aria-pressed={editing.time === t}
+                    className={`${btn} border-2 ${editing.time === t ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background"}`}>
+                    {t === "Morning" ? "🌅" : t === "Afternoon" ? "☀️" : "🌙"} {t}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend className="text-xl font-bold">Icon</legend>
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                {(Object.keys(MED_ICONS) as MedIconType[]).map((ic) => (
+                  <button key={ic} onClick={() => setEditing({ ...editing, icon: ic })} aria-pressed={editing.icon === ic}
+                    className={`${btn} flex items-center gap-3 border-2 ${editing.icon === ic ? "border-primary bg-success" : "border-border bg-background"}`}>
+                    <MedIcon icon={ic} size={36} /> {MED_ICONS[ic]}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            {error && <p role="alert" className="text-xl font-bold text-destructive">{error}</p>}
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => { setEditing(null); setError(""); }} className={btnOutline}>↩️ Cancel</button>
+              <button onClick={save} className={btnPrimary}>💾 Save Medication</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <ul className="space-y-3">
+              {meds.map((m) => (
+                <li key={m.id} className="flex flex-wrap items-center gap-3 rounded-2xl border-2 border-border p-3">
+                  <MedIcon icon={m.icon} />
+                  <span className="flex-1"><span className="block text-lg text-muted-foreground">{m.time}</span><span className="block text-xl font-bold">{m.name}</span></span>
+                  {confirmDel === m.id ? (
+                    <>
+                      <button onClick={() => setConfirmDel(null)} className={btnOutline}>↩️ Keep</button>
+                      <button onClick={() => { onDelete(m.id); setConfirmDel(null); }} className={`${btn} bg-destructive text-destructive-foreground`}>🗑️ Yes, Delete</button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => setEditing({ id: m.id, name: m.name, time: m.time, icon: m.icon })} className={btnOutline}>✏️ Edit</button>
+                      <button onClick={() => setConfirmDel(m.id)} className={`${btn} border-2 border-destructive bg-card text-destructive`}>🗑️ Delete Medication</button>
+                    </>
+                  )}
+                </li>
+              ))}
+              {meds.length === 0 && <p className="text-xl text-muted-foreground">No medications yet.</p>}
+            </ul>
+            <button onClick={() => setEditing({ name: "", time: "Morning", icon: "round" })} className={`mt-5 w-full ${btnPrimary}`}>➕ Add Medication</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Confetti() {
-  const colors = ["var(--plant-sunflower)", "var(--plant-rose)", "var(--leaf)", "var(--water-strong)", "var(--plant-lavender)"];
+  const colors = ["var(--plant-sunflower)", "var(--plant-blossom-mid)", "var(--leaf)", "var(--water-strong)", "var(--dragon)"];
   return (
     <div aria-hidden="true">
       {Array.from({ length: 70 }).map((_, i) => (

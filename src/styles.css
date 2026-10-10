@@ -54,6 +54,7 @@
   --color-success: var(--success);
   --color-water: var(--water);
   --color-water-strong: var(--water-strong);
+  --color-plant-sunflower: var(--plant-sunflower);
   --font-sans: var(--font-sans);
   --shadow-soft: var(--shadow-soft);
   --color-sidebar: var(--sidebar);
@@ -105,6 +106,22 @@
   --plant-blossom-dark: oklch(0.7 0.12 0);
   --plant-lavender: oklch(0.7 0.11 300);
   --plant-lavender-dark: oklch(0.55 0.13 300);
+  --plant-blossom-mid: oklch(0.8 0.1 355);
+  --pot-ceramic: oklch(0.55 0.06 230);
+  --pot-ceramic-rim: oklch(0.47 0.06 230);
+  --sand: oklch(0.86 0.07 85);
+  --sand-dark: oklch(0.7 0.07 70);
+  --soil: oklch(0.38 0.05 55);
+  --seed-light: oklch(0.95 0.01 90);
+  --wood: oklch(0.58 0.08 60);
+  --leaf-dark: oklch(0.42 0.11 150);
+  --star: oklch(0.99 0.005 90);
+  --cactus: oklch(0.62 0.15 140);
+  --cactus-dark: oklch(0.45 0.12 145);
+  --spike: oklch(0.9 0.04 100);
+  --dragon: oklch(0.58 0.25 350);
+  --grass: oklch(0.8 0.1 140);
+  --grass-dark: oklch(0.7 0.11 140);
   --shadow-soft: 0 12px 32px -12px oklch(0.4 0.06 150 / 0.25);
   --font-sans: "Atkinson Hyperlegible", system-ui, sans-serif;
 }
@@ -125,10 +142,13 @@ body { font-family: var(--font-sans); line-height: 1.5; }
 
 .plant .plant-body, .plant .leaf { transition: transform 0.9s cubic-bezier(.34,1.56,.64,1), filter 0.9s; }
 .plant { transition: filter 0.9s ease; }
-.plant-wilt { filter: saturate(0.3) brightness(0.95); }
-.plant-wilt .plant-body { transform: rotate(-8deg) scaleY(0.94); }
-.plant-wilt .leaf-l { transform: rotate(-35deg); }
-.plant-wilt .leaf-r { transform: rotate(35deg); }
+.plant-wilt { filter: grayscale(0.85) brightness(0.95); }
+.plant-wilt .plant-body { transform: rotate(-8deg) scaleY(0.92); }
+.tile-grass { background: repeating-linear-gradient(45deg, var(--grass) 0 10px, var(--grass-dark) 10px 20px); }
+@keyframes plant-in { 0% { transform: translateY(-40px) scale(0.3); opacity: 0 } 70% { transform: translateY(4px) scale(1.08); opacity: 1 } 100% { transform: none } }
+.plant-in { animation: plant-in 0.8s cubic-bezier(.34,1.56,.64,1); }
+@keyframes glow { 0%,100% { box-shadow: 0 0 0 0 var(--plant-sunflower) } 50% { box-shadow: 0 0 0 8px var(--plant-sunflower) } }
+.glow { animation: glow 1.6s ease-in-out infinite; }
 .plant-healthy { animation: sway 5s ease-in-out infinite; transform-origin: 50% 95%; }
 @keyframes sway { 0%,100% { transform: rotate(-1deg) } 50% { transform: rotate(1deg) } }
 
