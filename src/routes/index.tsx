@@ -40,7 +40,7 @@ function Index() {
     setState(s);
   }, []);
   useEffect(() => { if (state) localStorage.setItem(KEY, JSON.stringify(state)); }, [state]);
-  useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); } }, [toast]);
+  useEffect(() => { if (!toast) return undefined; const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); }, [toast]);
 
   if (!state) return <div className="min-h-dvh bg-background" />;
 
